@@ -7,6 +7,17 @@ function logtable(table)
     log('    ' .. tostring(index) .. ' : ' .. tostring(value))
   end
 end
+function clone_table(table)
+  local copy = {}
+  for key, val in pairs(table) do
+    copy[key] = val
+  end
+  return copy
+end
+
+local sep = package.config:sub(1, 1)
+local script_folder = debug.getinfo(1).source:match("@?(.*[\\|/])")
+rtk = dofile(script_folder .. 'tilr_RS5K Mapper' .. sep .. 'rtk.lua')
 
 globals = {
   win_x = nil,
@@ -15,7 +26,9 @@ globals = {
   win_h = 553,
   key_h = 30,
   key_w = 6,
-  region_h = 254
+  region_h = 254,
+  vel_h = 2,
+  drag_margin = 10,
 }
 g = globals
 
@@ -26,9 +39,37 @@ local exists, win_y = reaper.GetProjExtState(0, 'rs5kmapper', 'win_y')
 if exists ~= 0 then globals.win_y = tonumber(win_y) end
 
 sel_key = nil
-regions = {
-  {30, 50, 0, 127}
+regions = {}
+mouse = {
+  down = false,
+  toggled = false,
+  drag = {
+    active = false,
+    start_x = 0,
+    start_y = 0,
+    region = nil, -- original copy of region
+    margin = nil,
+  }
 }
+
+function make_region(keymin, keymax, velmin, velmax)
+  return {
+    id = rtk.uuid4(),
+    keymin = keymin,
+    keymax = keymax,
+    velmin = velmin,
+    velmax = velmax,
+    x = keymin * g.key_w,
+    y = g.win_h - (velmax * g.vel_h + g.key_h),
+    w = (keymax - keymin) * g.key_w + g.key_w,
+    h = (velmax - velmin) * g.vel_h + g.vel_h,
+    hover = false,
+    selected = false,
+  }
+end
+
+table.insert(regions, make_region(30, 50, 0, 127))
+table.insert(regions, make_region(70, 90, 0, 127))
 
 function draw_keyboard()
   function draw_key (x, y, w, h, black_key)
@@ -67,29 +108,172 @@ function draw_guides()
 end
 
 function draw_regions()
-  local vel_h = g.region_h / 127
-  for i, reg in ipairs(regions) do
-    gfx.set(0, 1, 1, 0.25)
-    local left = reg[1] * g.key_w
-    local top = globals.win_h - (reg[4] * vel_h + g.key_h)
-    local width = (reg[2] - reg[1]) * g.key_w + g.key_w
-    local height = (reg[4] - reg[3]) * vel_h + vel_h
-    gfx.rect(left, top, width, height, 1)
+  for _, reg in ipairs(regions) do
+    gfx.set(0, .75, .75, reg.selected and 0.5 or 0.25)
+    gfx.rect(reg.x, reg.y, reg.w, reg.h, 1)
+    if reg.hover or reg.selected then
+      gfx.set(0, 1, 1, 0.5)
+      gfx.rect(reg.x, reg.y, reg.w, reg.h, 0)
+    end
+  end
+end
+
+function select_region(reg)
+  local index = -1
+  for i,r in ipairs(regions) do
+    r.selected = r == reg
+    if r.selected then index = i end
+  end
+  if index > -1 then -- move region to top of the list
+    table.remove(regions, index)
+    table.insert(regions, reg)
+  end
+end
+
+
+
+function start_drag(region, margin)
+  mouse.drag.active = true
+  mouse.drag.region = clone_table(region) -- region copy
+  mouse.drag.start_x = rtk.mouse.x
+  mouse.drag.start_y = rtk.mouse.y
+  mouse.drag.margin = margin
+end
+
+function stop_drag()
+  mouse.drag.active = false
+  mouse.drag.region = nil
+  mouse.drag.margin = nil
+end
+
+function update_drag()
+  if not mouse.drag.active then return end
+  local reg = mouse.drag.region
+  local delta_x = rtk.mouse.x - mouse.drag.start_x
+  local delta_y = rtk.mouse.y - mouse.drag.start_y
+  local keymin = mouse.drag.region.keymin
+  local keymax = mouse.drag.region.keymax
+  local velmin = mouse.drag.region.velmin
+  local velmax = mouse.drag.region.velmax
+  if mouse.drag.margin == 'left' then
+    keymin = mouse.drag.region.keymin + math.floor(delta_x / g.key_w)
+  elseif mouse.drag.margin == 'right' then
+    keymax = mouse.drag.region.keymax + math.floor(delta_x / g.key_w)
+  elseif mouse.drag.margin == 'top' then
+    velmax = velmax - math.floor(delta_y / g.vel_h)
+  elseif mouse.drag.margin == 'bottom' then
+    velmin = velmin - math.floor(delta_y / g.vel_h)
+  else
+    keymin = keymin + math.floor(delta_x / g.key_w)
+    keymax = keymax + math.floor(delta_x / g.key_w)
+    velmin = velmin - math.floor(delta_y / g.vel_h)
+    velmax = velmax - math.floor(delta_y / g.vel_h)
+  end
+  if keymin > keymax then
+    local tmp = keymin
+    keymin = keymax
+    keymax = tmp
+  end
+  if velmin > velmax then
+    local tmp = velmin
+    velmin = velmax
+    velmax = tmp
+  end
+  if keymin < 0 then -- fix out of bounds drag
+    if not mouse.drag.margin then keymax = keymax - keymin end
+    keymin = 0
+  end
+  if keymax > 127 then -- fix out of bounds drag
+    if not mouse.drag.margin then keymin = keymin + 127 - keymax end
+    keymax = 127
+  end
+  if velmin < 0 then
+    if not mouse.drag.margin then velmax = velmax - velmin end
+    velmin = 0
+  end
+  if velmax > 127 then
+    if not mouse.drag.margin then velmin = velmin + 127 - velmax end
+    velmax = 127
+  end
+  local newreg = make_region(keymin, keymax, velmin, velmax)
+  for _, rr in ipairs(regions) do
+    if rr.id == reg.id then
+        rr.keymin = newreg.keymin
+        rr.keymax = newreg.keymax
+        rr.x = newreg.x
+        rr.w = newreg.w
+        rr.velmin = newreg.velmin
+        rr.velmax = newreg.velmax
+        rr.y = newreg.y
+        rr.h = newreg.h
+    end
+  end
+end
+
+function update_mouse()
+  local hover_margin = nil
+  local hover = false
+  local selected = false
+  if mouse.drag.active then
+    goto continue
+  end
+  for i = #regions, 1, -1 do
+    local reg = regions[i]
+		reg.hover = false
+    if not hover and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y, reg.w, reg.h) then -- mouse in region
+      if not hover then
+        reg.hover = true
+        hover = true
+      end
+      if not selected and mouse.toggled then
+        selected = reg
+      end
+      if rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y + reg.h / 2 - g.drag_margin / 2, g.drag_margin, g.drag_margin) then -- mouse in left drag
+        hover_margin = 'left'
+      elseif rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x + reg.w - g.drag_margin, reg.y + reg.h / 2 - g.drag_margin / 2, g.drag_margin, g.drag_margin) then -- mouse in right drag
+        hover_margin = 'right'
+      elseif rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x + reg.w / 2 - g.drag_margin / 2, reg.y, g.drag_margin, g.drag_margin) then -- mouse in top drag
+        hover_margin = 'top'
+      elseif rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x + reg.w / 2 - g.drag_margin / 2, reg.y + reg.h - g.drag_margin, g.drag_margin, g.drag_margin) then -- mouse in bottom drag
+        hover_margin = 'bottom'
+      end
+    end
+	end
+  if selected then
+    select_region(selected)
+    start_drag(selected, hover_margin)
+  end
+  if not hover and not mouse.drag.margin then
+    window:request_mouse_cursor(rtk.mouse.cursors.POINTER)
+  end
+  ::continue::
+  if mouse.drag.margin or hover_margin then -- if its dragging margins or hovering drag margins draw cursor
+    if mouse.drag.margin == 'left' or hover_margin == 'left' or mouse.drag.margin == 'right' or hover_margin == 'right' then
+      window:request_mouse_cursor(rtk.mouse.cursors.SIZE_EW)
+    elseif mouse.drag.margin == 'top' or hover_margin == 'top' or mouse.drag.margin == 'bottom' or hover_margin == 'bottom' then
+      window:request_mouse_cursor(rtk.mouse.cursors.SIZE_NS)
+    end
+  end
+  if mouse.drag.active and not mouse.down then
+    stop_drag()
+  end
+  if not selected and mouse.toggled and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, 0, g.win_h - g.region_h - g.key_h, g.win_w, g.win_h) then -- mouse in regions area
+    select_region(nil)
   end
 end
 
 function draw()
+  update_mouse()
+  update_drag()
   draw_keyboard()
   draw_selected_key()
   draw_guides()
   draw_regions()
+  mouse.toggled = false
   text:attr('text', 'Key ' .. sel_key)
 end
 
 function init()
-  local sep = package.config:sub(1, 1)
-  local script_folder = debug.getinfo(1).source:match("@?(.*[\\|/])")
-  rtk = dofile(script_folder .. 'tilr_RS5K Mapper' .. sep .. 'rtk.lua')
   window = rtk.Window{ w=globals.win_w, h=globals.win_h, title='RS5K Mapper'}
   window.onmove = function (self)
     reaper.SetProjExtState(0, 'rs5kmapper', 'win_x', self.x)
@@ -99,6 +283,13 @@ function init()
     window:queue_draw()
   end
   window.ondraw = draw
+  window.onmousedown = function ()
+    mouse.toggled = true
+    mouse.down = true
+  end
+  window.onmouseup = function ()
+    mouse.down = false
+  end
 
   local box = window:add(rtk.VBox{})
   text = box:add(rtk.Text{'Apply '})
