@@ -108,12 +108,17 @@ function draw_guides()
 end
 
 function draw_regions()
+  local helper_w = 6
   for _, reg in ipairs(regions) do
-    gfx.set(0, .75, .75, reg.selected and 0.5 or 0.25)
+    gfx.set(0, 1, 1, reg.selected and 0.5 or 0.25)
     gfx.rect(reg.x, reg.y, reg.w, reg.h, 1)
-    if reg.hover or reg.selected then
-      gfx.set(0, 1, 1, 0.5)
-      gfx.rect(reg.x, reg.y, reg.w, reg.h, 0)
+    gfx.set(0, 1, 1, (reg.hover or reg.selected) and 0.75 or 0.5)
+    gfx.rect(reg.x, reg.y, reg.w, reg.h, 0)
+    if reg.hover then -- draw drag helpers
+      gfx.rect(reg.x, reg.y + reg.h / 2 - helper_w / 2, helper_w, helper_w, 1) -- left
+      gfx.rect(reg.x + reg.w - helper_w, reg.y + reg.h / 2 - helper_w / 2, helper_w, helper_w, 1) -- right
+      gfx.rect(reg.x + reg.w / 2 - helper_w / 2, reg.y, helper_w, helper_w, 1) -- top
+      gfx.rect(reg.x + reg.w / 2 - helper_w / 2, reg.y + reg.h - helper_w, helper_w, helper_w, 1) -- bottom
     end
   end
 end
@@ -187,11 +192,11 @@ function update_drag()
     if not mouse.drag.margin then keymin = keymin + 127 - keymax end
     keymax = 127
   end
-  if velmin < 0 then
+  if velmin < 0 then --
     if not mouse.drag.margin then velmax = velmax - velmin end
     velmin = 0
   end
-  if velmax > 127 then
+  if velmax > 127 then --
     if not mouse.drag.margin then velmin = velmin + 127 - velmax end
     velmax = 127
   end
