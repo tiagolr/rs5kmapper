@@ -19,6 +19,12 @@ local sep = package.config:sub(1, 1)
 local script_folder = debug.getinfo(1).source:match("@?(.*[\\|/])")
 rtk = dofile(script_folder .. 'tilr_RS5K Mapper' .. sep .. 'rtk.lua')
 
+_notes = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
+notes = {}
+for i = 0, 127 do
+  notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1)
+end
+
 globals = {
   win_x = nil,
   win_y = nil,
@@ -47,7 +53,7 @@ mouse = {
     active = false,
     start_x = 0,
     start_y = 0,
-    region = nil, -- original copy of region
+    region = nil,
     margin = nil,
   }
 }
@@ -59,12 +65,16 @@ function make_region(keymin, keymax, velmin, velmax)
     keymax = keymax,
     velmin = velmin,
     velmax = velmax,
+    pitch = 0,
     x = keymin * g.key_w,
     y = g.win_h - (velmax * g.vel_h + g.key_h),
     w = (keymax - keymin) * g.key_w + g.key_w,
     h = (velmax - velmin) * g.vel_h + g.vel_h,
     hover = false,
     selected = false,
+    track = 0,
+    fxid = '',
+    file = '',
   }
 end
 
@@ -90,11 +100,21 @@ function draw_keyboard()
   end
 end
 
-function draw_selected_key()
-  local nkey = math.floor(rtk.mouse.x / globals.key_w)
-  sel_key = nkey
-  gfx.set(1, 0, 0, 1)
-  gfx.rect(nkey * g.key_w, g.win_h - g.key_h, g.key_w, g.key_h)
+function draw_pitch_key()
+  -- local nkey = math.floor(rtk.mouse.x / globals.key_w)
+  -- sel_key = nkey
+  -- gfx.set(1, 0, 0, 1)
+  -- gfx.rect(nkey * g.key_w, g.win_h - g.key_h, g.key_w, g.key_h)
+  for _, reg in ipairs(regions) do
+    if reg.selected then
+      gfx.set(1, .5, 0, 1)
+      key = reg.keymin - reg.pitch
+      if key < 0 or key > 127 then
+        return
+      end
+      gfx.rect(key * g.key_w, g.win_h - g.key_h, g.key_w, g.key_h)
+    end
+  end
 end
 
 function draw_guides()
@@ -123,6 +143,17 @@ function draw_regions()
   end
 end
 
+-- recalc regions after window resize
+function recalc_regions ()
+  for _, reg in ipairs(regions) do
+    rr = make_region(reg.keymin, reg.keymax, reg.velmin, reg.velmax)
+    reg.x = rr.x
+    reg.y = rr.y
+    reg.w = rr.w
+    reg.h = rr.h
+  end
+end
+
 function select_region(reg)
   local index = -1
   for i,r in ipairs(regions) do
@@ -134,8 +165,6 @@ function select_region(reg)
     table.insert(regions, reg)
   end
 end
-
-
 
 function start_drag(region, margin)
   mouse.drag.active = true
@@ -216,6 +245,14 @@ function update_drag()
 end
 
 function update_mouse()
+  if rtk.mouse.down == 1 then
+    if not mouse.down then
+      mouse.toggled = true
+    end
+    mouse.down = true
+  else
+    mouse.down = false
+  end
   local hover_margin = nil
   local hover = false
   local selected = false
@@ -226,10 +263,8 @@ function update_mouse()
     local reg = regions[i]
 		reg.hover = false
     if not hover and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y, reg.w, reg.h) then -- mouse in region
-      if not hover then
-        reg.hover = true
-        hover = true
-      end
+      reg.hover = true
+      hover = true
       if not selected and mouse.toggled then
         selected = reg
       end
@@ -244,6 +279,7 @@ function update_mouse()
       end
     end
 	end
+  ::continue::
   if selected then
     select_region(selected)
     start_drag(selected, hover_margin)
@@ -251,7 +287,6 @@ function update_mouse()
   if not hover and not mouse.drag.margin then
     window:request_mouse_cursor(rtk.mouse.cursors.POINTER)
   end
-  ::continue::
   if mouse.drag.margin or hover_margin then -- if its dragging margins or hovering drag margins draw cursor
     if mouse.drag.margin == 'left' or hover_margin == 'left' or mouse.drag.margin == 'right' or hover_margin == 'right' then
       window:request_mouse_cursor(rtk.mouse.cursors.SIZE_EW)
@@ -268,14 +303,35 @@ function update_mouse()
 end
 
 function draw()
+  -- after x milliseconds if not dragging
+  --  fetch_regions()
   update_mouse()
   update_drag()
   draw_keyboard()
-  draw_selected_key()
+  draw_pitch_key()
   draw_guides()
   draw_regions()
+  draw_ui()
   mouse.toggled = false
-  text:attr('text', 'Key ' .. sel_key)
+end
+
+function draw_ui()
+  local sel_region
+  for _, reg in ipairs(regions) do
+    if reg.selected then sel_region = reg end
+  end
+  if not sel_region then
+    ui_hbox:attr('visible', false)
+    ui_helpbox:attr('visible', true)
+  else
+    ui_hbox:attr('visible', true)
+    ui_helpbox:attr('visible', false)
+    ui_note_start:attr('text', sel_region.keymin .. ' ' .. notes[sel_region.keymin + 1])
+    ui_note_end:attr('text', sel_region.keymax .. ' ' .. notes[sel_region.keymax + 1])
+    ui_vel_min:attr('text', sel_region.velmin)
+    ui_vel_max:attr('text', sel_region.velmax)
+    ui_pitch:attr('text', sel_region.pitch .. ' ' .. (notes[sel_region.keymin - sel_region.pitch + 1] or ''))
+  end
 end
 
 function init()
@@ -288,16 +344,28 @@ function init()
     window:queue_draw()
   end
   window.ondraw = draw
-  window.onmousedown = function ()
-    mouse.toggled = true
-    mouse.down = true
-  end
-  window.onmouseup = function ()
-    mouse.down = false
+
+  window.onresize = function ()
+    globals.win_w = window.w
+    globals.win_h = window.h
+    globals.key_w = window.w / 128
+    recalc_regions()
   end
 
-  local box = window:add(rtk.VBox{})
-  text = box:add(rtk.Text{'Apply '})
+  ui_vbox = window:add(rtk.VBox{ padding=10, spacing=10 })
+  ui_hbox = ui_vbox:add(rtk.HBox{ spacing=10 })
+  ui_hbox:add(rtk.Text{'Vel min'})
+  ui_vel_min = ui_hbox:add(rtk.Text{'', w=40 })
+  ui_hbox:add(rtk.Text{'Vel max'})
+  ui_vel_max = ui_hbox:add(rtk.Text{'', w=40 })
+  ui_hbox:add(rtk.Text{'Note start'})
+  ui_note_start = ui_hbox:add(rtk.Text{'', w=60 })
+  ui_hbox:add(rtk.Text{'Note end'})
+  ui_note_end = ui_hbox:add(rtk.Text{'', w=60 })
+  ui_hbox:add(rtk.Text{'Pitch'})
+  ui_pitch = ui_hbox:add(rtk.Text{'', w=60})
+
+  ui_helpbox = ui_vbox:add(rtk.Text{'No region selected', visible=false})
 
   window:open{align='center'}
   if globals.win_x and globals.win_y then
