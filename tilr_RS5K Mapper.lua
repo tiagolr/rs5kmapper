@@ -23,7 +23,7 @@ globals = {
   win_x = nil,
   win_y = nil,
   win_w = 768,
-  win_h = 553,
+  win_h = 385,
   key_h = 30,
   key_w = 6,
   region_h = 254,
@@ -40,11 +40,10 @@ if exists ~= 0 then globals.win_y = tonumber(win_y) end
 
 _notes = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
 notes = {}
-for i = 0, 127 do
-  notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1)
-end
+for i = 0, 127 do notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1) end
 colors = {'cyan', 'coral', 'dodgerblue', 'chartreuse', 'deeppink', 'floralwhite', 'yellow', 'floralwhite', 'lightcyan', 'lightgreen', 'violet', 'teal', 'salmon', 'paleturquoise', 'lawngreen', 'mintcream'}
 sel_tracks = {}
+rs5k_count = 0
 
 sel_key = nil
 regions = {}
@@ -216,6 +215,7 @@ end
 
 function fetch_regions()
   sel_tracks = {}
+  rs5k_count = 0
   local regions_map = {}
   local new_regions = {}
   for _, reg in ipairs(regions) do
@@ -231,6 +231,7 @@ function fetch_regions()
   for i, track in ipairs(sel_tracks) do
     for j = 1, reaper.TrackFX_GetCount(track) do
       if is_rs5k(track, j - 1) then
+        rs5k_count = rs5k_count + 1
         local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
         if regions_map[fxid] then
           update_region_from_fx(regions_map[fxid], track, j - 1, i - 1)
@@ -456,6 +457,13 @@ function draw_ui()
   if not sel_region then
     ui_controls:attr('visible', false)
     ui_helpbox:attr('visible', true)
+    local help_text = ''
+    if #sel_tracks == 0 then
+      help_text = 'No tracks selected'
+    elseif rs5k_count == 0 then
+      help_text = 'No RS5K instances found'
+    end
+    ui_helpbox:attr('text', help_text)
   else
     ui_controls:attr('visible', true)
     ui_helpbox:attr('visible', false)
@@ -465,6 +473,7 @@ function draw_ui()
     ui_vel_max:attr('text', sel_region.velmax)
     ui_pitch:attr('text', sel_region.pitch .. ' ' .. (notes[sel_region.keymin - sel_region.pitch + 1] or ''))
     local samplename = sel_region.file:split('\\')
+    samplename = samplename[#samplename]:split('/') -- split multiple separators
     ui_sample_text:attr('text', samplename[#samplename])
   end
 end
