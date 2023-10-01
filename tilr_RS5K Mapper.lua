@@ -19,13 +19,6 @@ local sep = package.config:sub(1, 1)
 local script_folder = debug.getinfo(1).source:match("@?(.*[\\|/])")
 rtk = dofile(script_folder .. 'tilr_RS5K Mapper' .. sep .. 'rtk.lua')
 
-_notes = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
-notes = {}
-for i = 0, 127 do
-  notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1)
-end
-sel_tracks = {}
-
 globals = {
   win_x = nil,
   win_y = nil,
@@ -45,11 +38,20 @@ if exists ~= 0 then globals.win_x = tonumber(win_x) end
 local exists, win_y = reaper.GetProjExtState(0, 'rs5kmapper', 'win_y')
 if exists ~= 0 then globals.win_y = tonumber(win_y) end
 
+_notes = {'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'}
+notes = {}
+for i = 0, 127 do
+  notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1)
+end
+colors = {'cyan', 'coral', 'dodgerblue', 'chartreuse', 'deeppink', 'floralwhite', 'yellow', 'floralwhite', 'lightcyan', 'lightgreen', 'violet', 'teal', 'salmon', 'paleturquoise', 'lawngreen', 'mintcream'}
+sel_tracks = {}
+
 sel_key = nil
 regions = {}
 mouse = {
   down = false,
   toggled = false,
+  double_click_timer = 0,
   drag = {
     active = false,
     start_x = 0,
@@ -132,9 +134,10 @@ end
 function draw_regions()
   local helper_w = 6
   for _, reg in ipairs(regions) do
-    gfx.set(0, 1, 1, reg.selected and 0.5 or 0.25)
+    local r, g, b, _ = rtk.color.rgba(colors[(reg.track % #colors) + 1])
+    gfx.set(r, g, b, reg.selected and 0.5 or 0.25)
     gfx.rect(reg.x, reg.y, reg.w, reg.h, 1)
-    gfx.set(0, 1, 1, (reg.hover or reg.selected) and 0.75 or 0.5)
+    gfx.set(r, g, b, (reg.hover or reg.selected) and 0.75 or 0.5)
     gfx.rect(reg.x, reg.y, reg.w, reg.h, 0)
     if reg.hover then -- draw drag helpers
       gfx.rect(reg.x, reg.y + reg.h / 2 - helper_w / 2, helper_w, helper_w, 1) -- left
@@ -212,7 +215,7 @@ function create_region_from_fx(track, nfx, ntrack)
 end
 
 function fetch_regions()
-  local sel_tracks = {}
+  sel_tracks = {}
   local regions_map = {}
   local new_regions = {}
   for _, reg in ipairs(regions) do
@@ -230,9 +233,9 @@ function fetch_regions()
       if is_rs5k(track, j - 1) then
         local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
         if regions_map[fxid] then
-          update_region_from_fx(regions_map[fxid], track, j - 1, i)
+          update_region_from_fx(regions_map[fxid], track, j - 1, i - 1)
         else
-          local reg = create_region_from_fx(track, j - 1, i)
+          local reg = create_region_from_fx(track, j - 1, i - 1)
           table.insert(new_regions, reg)
         end
       end
@@ -244,6 +247,24 @@ function fetch_regions()
     end
   end
   regions = new_regions
+end
+
+function update_rs5k_from_reg(reg)
+  for i = 1, reaper.GetNumTracks() do
+    local track = reaper.GetTrack(0, i - 1)
+    for j = 1, reaper.TrackFX_GetCount(track) do
+      local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
+      if fxid == reg.fxid then
+        reaper.TrackFX_SetParam(track, j - 1, 3, reg.keymin / 127)
+        reaper.TrackFX_SetParam(track, j - 1, 4, reg.keymax / 127)
+        reaper.TrackFX_SetParam(track, j - 1, 5, (reg.pitch + 80) / (80 * 2))
+        reaper.TrackFX_SetParam(track, j - 1, 17, reg.velmin / 127)
+        reaper.TrackFX_SetParam(track, j - 1, 18, reg.velmax / 127)
+        goto continue
+      end
+    end
+  end
+  :: continue ::
 end
 
 function start_drag(region, margin)
@@ -320,6 +341,7 @@ function update_drag()
         rr.velmax = newreg.velmax
         rr.y = newreg.y
         rr.h = newreg.h
+        update_rs5k_from_reg(rr)
     end
   end
 end
@@ -377,9 +399,34 @@ function update_mouse()
   if mouse.drag.active and not mouse.down then
     stop_drag()
   end
-  if not selected and mouse.toggled and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, 0, g.win_h - g.region_h - g.key_h, g.win_w, g.win_h) then -- mouse in regions area
+  if not selected and mouse.toggled and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, 0, g.win_h - g.region_h - g.key_h - 50, g.win_w, g.win_h) then -- mouse in regions area
     select_region(nil)
   end
+end
+
+function popup_fx(fxid)
+  for i = 1, reaper.GetNumTracks() do
+    local track = reaper.GetTrack(0, i - 1)
+    for j = 1, reaper.TrackFX_GetCount(track) do
+      local _fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
+      if _fxid == fxid then
+        reaper.TrackFX_Show(track, j - 1, 1)
+        goto continue
+      end
+    end
+  end
+  :: continue ::
+end
+
+function on_double_click()
+  for i = #regions, 1, -1 do
+    local reg = regions[i]
+    if rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y, reg.w, reg.h) then
+      popup_fx(reg.fxid)
+      goto continue
+    end
+  end
+  :: continue ::
 end
 
 function draw()
@@ -391,6 +438,13 @@ function draw()
   draw_guides()
   draw_regions()
   draw_ui()
+  if mouse.toggled then
+    local time = reaper.time_precise()
+    if time - mouse.double_click_timer < 0.25 then
+      on_double_click()
+    end
+    mouse.double_click_timer = reaper.time_precise()
+  end
   mouse.toggled = false
 end
 
@@ -400,16 +454,18 @@ function draw_ui()
     if reg.selected then sel_region = reg end
   end
   if not sel_region then
-    ui_hbox:attr('visible', false)
+    ui_controls:attr('visible', false)
     ui_helpbox:attr('visible', true)
   else
-    ui_hbox:attr('visible', true)
+    ui_controls:attr('visible', true)
     ui_helpbox:attr('visible', false)
     ui_note_start:attr('text', sel_region.keymin .. ' ' .. notes[sel_region.keymin + 1])
     ui_note_end:attr('text', sel_region.keymax .. ' ' .. notes[sel_region.keymax + 1])
     ui_vel_min:attr('text', sel_region.velmin)
     ui_vel_max:attr('text', sel_region.velmax)
     ui_pitch:attr('text', sel_region.pitch .. ' ' .. (notes[sel_region.keymin - sel_region.pitch + 1] or ''))
+    local samplename = sel_region.file:split('\\')
+    ui_sample_text:attr('text', samplename[#samplename])
   end
 end
 
@@ -431,8 +487,8 @@ function init()
     recalc_regions()
   end
 
-  ui_vbox = window:add(rtk.VBox{ padding=10, spacing=10 })
-  ui_hbox = ui_vbox:add(rtk.HBox{ spacing=10 })
+  ui_controls = window:add(rtk.VBox{ padding=10, spacing=10 })
+  ui_hbox = ui_controls:add(rtk.HBox{ spacing=10 })
   ui_hbox:add(rtk.Text{'Vel min'})
   ui_vel_min = ui_hbox:add(rtk.Text{'', w=40 })
   ui_hbox:add(rtk.Text{'Vel max'})
@@ -443,8 +499,9 @@ function init()
   ui_note_end = ui_hbox:add(rtk.Text{'', w=60 })
   ui_hbox:add(rtk.Text{'Pitch'})
   ui_pitch = ui_hbox:add(rtk.Text{'', w=60})
+  ui_sample_text = ui_controls:add(rtk.Text{''})
 
-  ui_helpbox = ui_vbox:add(rtk.Text{'No region selected', visible=false})
+  ui_helpbox = window:add(rtk.Text{'No region selected', padding=10})
 
   window:open{align='center'}
   if globals.win_x and globals.win_y then
