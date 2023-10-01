@@ -24,6 +24,7 @@ notes = {}
 for i = 0, 127 do
   notes[i+1] = _notes[i % 12 + 1] .. (math.floor(i/12) - 1)
 end
+sel_tracks = {}
 
 globals = {
   win_x = nil,
@@ -72,6 +73,7 @@ function make_region(keymin, keymax, velmin, velmax)
     h = (velmax - velmin) * g.vel_h + g.vel_h,
     hover = false,
     selected = false,
+    updated = false,
     track = 0,
     fxid = '',
     file = '',
@@ -164,6 +166,84 @@ function select_region(reg)
     table.remove(regions, index)
     table.insert(regions, reg)
   end
+end
+
+function is_rs5k(tr, nfx)
+  local ret, pname = reaper.TrackFX_GetParamName(tr, nfx, 3)
+  return ret and pname == 'Note range start'
+end
+
+function update_region_from_fx(reg, track, nfx, ntrack)
+  local _, keymin = reaper.TrackFX_GetFormattedParamValue(track, nfx, 3)
+  local _, keymax = reaper.TrackFX_GetFormattedParamValue(track, nfx, 4)
+  local _, pitch = reaper.TrackFX_GetFormattedParamValue(track, nfx, 5)
+  local _, velmin = reaper.TrackFX_GetFormattedParamValue(track, nfx, 17)
+  local _, velmax = reaper.TrackFX_GetFormattedParamValue(track, nfx, 18)
+  local _, file = reaper.TrackFX_GetNamedConfigParm(track, nfx, 'FILE0')
+  local rr = make_region(tonumber(keymin), tonumber(keymax), tonumber(velmin), tonumber(velmax))
+  reg.keymin = rr.keymin
+  reg.keymax = rr.keymax
+  reg.velmin = rr.velmin
+  reg.velmax = rr.velmax
+  reg.x = rr.x
+  reg.y = rr.y
+  reg.w = rr.w
+  reg.h = rr.h
+  reg.pitch = tonumber(pitch)
+  reg.track = ntrack
+  reg.file = file
+  reg.updated = true
+end
+
+function create_region_from_fx(track, nfx, ntrack)
+  local _, keymin = reaper.TrackFX_GetFormattedParamValue(track, nfx, 3)
+  local _, keymax = reaper.TrackFX_GetFormattedParamValue(track, nfx, 4)
+  local _, pitch = reaper.TrackFX_GetFormattedParamValue(track, nfx, 5)
+  local _, velmin = reaper.TrackFX_GetFormattedParamValue(track, nfx, 17)
+  local _, velmax = reaper.TrackFX_GetFormattedParamValue(track, nfx, 18)
+  local _, file = reaper.TrackFX_GetNamedConfigParm(track, nfx, 'FILE0')
+  local fxid = reaper.TrackFX_GetFXGUID(track, nfx)
+  local reg = make_region(tonumber(keymin), tonumber(keymax), tonumber(velmin), tonumber(velmax))
+  reg.track = ntrack
+  reg.file = file
+  reg.fxid = fxid
+  reg.pitch = tonumber(pitch)
+  return reg
+end
+
+function fetch_regions()
+  local sel_tracks = {}
+  local regions_map = {}
+  local new_regions = {}
+  for _, reg in ipairs(regions) do
+    reg.updated = false
+    regions_map[reg.fxid] = reg
+  end
+  for i = 1, reaper.GetNumTracks() do
+    local track = reaper.GetTrack(0, i - 1)
+    if reaper.IsTrackSelected(track) then
+      table.insert(sel_tracks, track)
+    end
+  end
+  for i, track in ipairs(sel_tracks) do
+    for j = 1, reaper.TrackFX_GetCount(track) do
+      if is_rs5k(track, j - 1) then
+        local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
+        if regions_map[fxid] then
+          update_region_from_fx(regions_map[fxid], track, j - 1, i)
+        else
+          local reg = create_region_from_fx(track, j - 1, i)
+          table.insert(new_regions, reg)
+        end
+      end
+    end
+  end
+  for _, reg in ipairs(regions) do
+    if reg.updated then
+      table.insert(new_regions, reg)
+    end
+  end
+  regions = new_regions
 end
 
 function start_drag(region, margin)
@@ -265,7 +345,7 @@ function update_mouse()
     if not hover and rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y, reg.w, reg.h) then -- mouse in region
       reg.hover = true
       hover = true
-      if not selected and mouse.toggled then
+      if mouse.toggled then
         selected = reg
       end
       if rtk.point_in_box(rtk.mouse.x, rtk.mouse.y, reg.x, reg.y + reg.h / 2 - g.drag_margin / 2, g.drag_margin, g.drag_margin) then -- mouse in left drag
@@ -287,7 +367,7 @@ function update_mouse()
   if not hover and not mouse.drag.margin then
     window:request_mouse_cursor(rtk.mouse.cursors.POINTER)
   end
-  if mouse.drag.margin or hover_margin then -- if its dragging margins or hovering drag margins draw cursor
+  if mouse.drag.margin or hover_margin then -- if its dragging or hovering margins draw cursor
     if mouse.drag.margin == 'left' or hover_margin == 'left' or mouse.drag.margin == 'right' or hover_margin == 'right' then
       window:request_mouse_cursor(rtk.mouse.cursors.SIZE_EW)
     elseif mouse.drag.margin == 'top' or hover_margin == 'top' or mouse.drag.margin == 'bottom' or hover_margin == 'bottom' then
@@ -303,8 +383,7 @@ function update_mouse()
 end
 
 function draw()
-  -- after x milliseconds if not dragging
-  --  fetch_regions()
+  fetch_regions()
   update_mouse()
   update_drag()
   draw_keyboard()
