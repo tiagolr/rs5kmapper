@@ -226,18 +226,16 @@ function fetch_regions()
     local track = reaper.GetTrack(0, i - 1)
     if reaper.IsTrackSelected(track) then
       table.insert(sel_tracks, track)
-    end
-  end
-  for i, track in ipairs(sel_tracks) do
-    for j = 1, reaper.TrackFX_GetCount(track) do
-      if is_rs5k(track, j - 1) then
-        rs5k_count = rs5k_count + 1
-        local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
-        if regions_map[fxid] then
-          update_region_from_fx(regions_map[fxid], track, j - 1, i - 1)
-        else
-          local reg = create_region_from_fx(track, j - 1, i - 1)
-          table.insert(new_regions, reg)
+      for j = 1, reaper.TrackFX_GetCount(track) do
+        if is_rs5k(track, j - 1) then
+          rs5k_count = rs5k_count + 1
+          local fxid = reaper.TrackFX_GetFXGUID(track, j - 1)
+          if regions_map[fxid] then
+            update_region_from_fx(regions_map[fxid], track, j - 1, i - 1)
+          else
+            local reg = create_region_from_fx(track, j - 1, i - 1)
+            table.insert(new_regions, reg)
+          end
         end
       end
     end
