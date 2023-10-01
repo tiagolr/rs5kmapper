@@ -104,10 +104,6 @@ function draw_keyboard()
 end
 
 function draw_pitch_key()
-  -- local nkey = math.floor(rtk.mouse.x / globals.key_w)
-  -- sel_key = nkey
-  -- gfx.set(1, 0, 0, 1)
-  -- gfx.rect(nkey * g.key_w, g.win_h - g.key_h, g.key_w, g.key_h)
   for _, reg in ipairs(regions) do
     if reg.selected then
       gfx.set(1, .5, 0, 1)
